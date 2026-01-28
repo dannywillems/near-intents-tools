@@ -75,6 +75,36 @@ impl SolverRelayRpcClient {
             .ok_or_else(|| SolverRelayError::InvalidResponse("missing result".to_string()))
     }
 
+    /// Make an RPC call that may return null as a valid response
+    async fn call_nullable<P, R>(&self, method: &str, params: Option<Vec<P>>) -> Result<Option<R>>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let request = JsonRpcRequest::new(method, params);
+        debug!("RPC request: {}", serde_json::to_string(&request)?);
+
+        let response = self
+            .client
+            .post(&self.url)
+            .json(&request)
+            .send()
+            .await?
+            .json::<JsonRpcResponse<R>>()
+            .await?;
+
+        if let Some(error) = response.error {
+            error!("RPC error: {:?}", error);
+            return Err(SolverRelayError::RpcError {
+                code: error.code,
+                message: error.message,
+                data: error.data,
+            });
+        }
+
+        Ok(response.result)
+    }
+
     /// Request quotes for a token swap
     ///
     /// # Arguments
@@ -99,7 +129,9 @@ impl SolverRelayRpcClient {
             min_deadline_ms,
         };
 
-        self.call("quote", Some(vec![params])).await
+        // Quote API returns null when no quotes are available
+        let result: Option<Vec<Quote>> = self.call_nullable("quote", Some(vec![params])).await?;
+        Ok(result.unwrap_or_default())
     }
 
     /// Publish a signed intent for execution

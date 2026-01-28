@@ -1,23 +1,15 @@
 use near_intents_tools::{
     rpc::SolverRelayRpcClient, types::SubscriptionType, ws::SolverRelayWsClient, SolverEvent,
 };
+use serde::Deserialize;
 use tracing::{error, info};
 
-// EVM Chain IDs
-const CHAIN_ETH: u64 = 1;
-const CHAIN_ARB: u64 = 42161;
-const CHAIN_BASE: u64 = 8453;
-const CHAIN_OP: u64 = 10;
-const CHAIN_BSC: u64 = 56;
-const CHAIN_POL: u64 = 137;
-const CHAIN_AVAX: u64 = 43114;
-const CHAIN_GNOSIS: u64 = 100;
+const TOKENS_API_URL: &str = "https://1click.chaindefuser.com/v0/tokens";
 
-// Common ERC20 token addresses (same across most EVM chains)
+// Common ERC20 token addresses
 const USDC_ETH: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const USDT_ETH: &str = "0xdac17f958d2ee523a2206206994597c13d831ec7";
 const DAI_ETH: &str = "0x6b175474e89094c44da98b954eedeac495271d0f";
-const WETH: &str = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const WBTC_ETH: &str = "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599";
 
 // Base-specific addresses
@@ -26,6 +18,9 @@ const USDC_BASE: &str = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 // Arbitrum-specific addresses
 const USDC_ARB: &str = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
 const USDT_ARB: &str = "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9";
+
+// Gnosis-specific addresses
+const USDC_GNOSIS: &str = "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0";
 
 /// Resolve currency alias to full asset identifier
 /// Supports formats:
@@ -70,9 +65,10 @@ fn resolve_currency(input: &str) -> String {
 }
 
 /// Resolve chain:currency format to full asset identifier
+/// Cross-chain format: nep141:{chain}-{address}.omft.near
 fn resolve_chain_currency(chain: &str, currency: &str) -> String {
     match chain {
-        // NEAR chain
+        // NEAR chain - native tokens
         "near" => match currency {
             "near" | "wnear" => "nep141:wrap.near".to_string(),
             "usdt" => "nep141:usdt.tether-token.near".to_string(),
@@ -85,79 +81,136 @@ fn resolve_chain_currency(chain: &str, currency: &str) -> String {
             _ => format!("nep141:{}", currency),
         },
 
-        // Ethereum mainnet
+        // Ethereum mainnet via OMFT
         "eth" => match currency {
-            "eth" | "native" => format!("eth:{}:native", CHAIN_ETH),
-            "weth" => format!("eth:{}:{}", CHAIN_ETH, WETH),
-            "usdc" => format!("eth:{}:{}", CHAIN_ETH, USDC_ETH),
-            "usdt" => format!("eth:{}:{}", CHAIN_ETH, USDT_ETH),
-            "dai" => format!("eth:{}:{}", CHAIN_ETH, DAI_ETH),
-            "wbtc" => format!("eth:{}:{}", CHAIN_ETH, WBTC_ETH),
-            _ => format!("eth:{}:{}", CHAIN_ETH, currency),
+            "usdc" => format!("nep141:eth-{}.omft.near", USDC_ETH),
+            "usdt" => format!("nep141:eth-{}.omft.near", USDT_ETH),
+            "dai" => format!("nep141:eth-{}.omft.near", DAI_ETH),
+            "wbtc" => format!("nep141:eth-{}.omft.near", WBTC_ETH),
+            _ => format!("nep141:eth-{}.omft.near", currency),
         },
 
-        // Base
+        // Base via OMFT
         "base" => match currency {
-            "eth" | "native" => format!("eth:{}:native", CHAIN_BASE),
-            "usdc" => format!("eth:{}:{}", CHAIN_BASE, USDC_BASE),
-            _ => format!("eth:{}:{}", CHAIN_BASE, currency),
+            "usdc" => format!("nep141:base-{}.omft.near", USDC_BASE),
+            _ => format!("nep141:base-{}.omft.near", currency),
         },
 
-        // Arbitrum
+        // Arbitrum via OMFT
         "arb" | "arbitrum" => match currency {
-            "eth" | "native" => format!("eth:{}:native", CHAIN_ARB),
-            "usdc" => format!("eth:{}:{}", CHAIN_ARB, USDC_ARB),
-            "usdt" => format!("eth:{}:{}", CHAIN_ARB, USDT_ARB),
-            _ => format!("eth:{}:{}", CHAIN_ARB, currency),
+            "usdc" => format!("nep141:arb-{}.omft.near", USDC_ARB),
+            "usdt" => format!("nep141:arb-{}.omft.near", USDT_ARB),
+            _ => format!("nep141:arb-{}.omft.near", currency),
         },
 
-        // Optimism
-        "op" | "optimism" => match currency {
-            "eth" | "native" => format!("eth:{}:native", CHAIN_OP),
-            _ => format!("eth:{}:{}", CHAIN_OP, currency),
-        },
-
-        // BSC
-        "bsc" | "bnb" => match currency {
-            "bnb" | "native" => format!("eth:{}:native", CHAIN_BSC),
-            _ => format!("eth:{}:{}", CHAIN_BSC, currency),
-        },
-
-        // Polygon
-        "pol" | "polygon" | "matic" => match currency {
-            "matic" | "pol" | "native" => format!("eth:{}:native", CHAIN_POL),
-            _ => format!("eth:{}:{}", CHAIN_POL, currency),
-        },
-
-        // Avalanche
-        "avax" | "avalanche" => match currency {
-            "avax" | "native" => format!("eth:{}:native", CHAIN_AVAX),
-            _ => format!("eth:{}:{}", CHAIN_AVAX, currency),
-        },
-
-        // Gnosis
+        // Gnosis via OMFT
         "gnosis" | "xdai" => match currency {
-            "xdai" | "native" => format!("eth:{}:native", CHAIN_GNOSIS),
-            _ => format!("eth:{}:{}", CHAIN_GNOSIS, currency),
+            "usdc" => format!("nep141:gnosis-{}.omft.near", USDC_GNOSIS),
+            _ => format!("nep141:gnosis-{}.omft.near", currency),
         },
+
+        // Solana via OMFT
+        "sol" | "solana" => format!("nep141:sol-{}.omft.near", currency),
 
         // Bitcoin
-        "btc" | "bitcoin" => "btc:mainnet".to_string(),
+        "btc" | "bitcoin" => "nep141:btc.omft.near".to_string(),
 
-        // Solana
-        "sol" | "solana" => match currency {
-            "sol" | "native" => "solana:mainnet:native".to_string(),
-            _ => format!("solana:mainnet:{}", currency),
-        },
+        // Unknown chain - try OMFT format
+        _ => format!("nep141:{}-{}.omft.near", chain, currency),
+    }
+}
 
-        // Unknown chain - pass through
-        _ => format!("{}:{}", chain, currency),
+/// Get decimals for a token identifier
+fn token_decimals(identifier: &str) -> u8 {
+    // Check for OMFT cross-chain format
+    if identifier.starts_with("nep141:") && identifier.ends_with(".omft.near") {
+        let inner = identifier
+            .trim_start_matches("nep141:")
+            .trim_end_matches(".omft.near");
+        if let Some((_, addr)) = inner.split_once('-') {
+            return match addr.to_lowercase().as_str() {
+                // USDC/USDT have 6 decimals on all chains
+                a if a == USDC_ETH
+                    || a == USDC_BASE
+                    || a == USDC_ARB
+                    || a == USDC_GNOSIS
+                    || a == USDT_ETH
+                    || a == USDT_ARB =>
+                {
+                    6
+                }
+                // DAI has 18 decimals
+                a if a == DAI_ETH => 18,
+                // WBTC has 8 decimals
+                a if a == WBTC_ETH => 8,
+                // Default to 18 for unknown tokens
+                _ => 18,
+            };
+        }
+    }
+
+    // NEAR native tokens
+    match identifier {
+        "nep141:wrap.near" => 24,             // NEAR
+        "nep141:usdt.tether-token.near" => 6, // USDT
+        "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1" => 6, // USDC
+        "nep141:aurora" => 18,                // ETH
+        "nep141:btc.omft.near" => 8,          // BTC
+        _ => 18,                              // Default
+    }
+}
+
+/// Format a raw amount with decimals for human readability
+fn format_amount(raw: &str, decimals: u8) -> String {
+    if decimals == 0 {
+        return raw.to_string();
+    }
+
+    let raw = raw.trim_start_matches('0');
+    if raw.is_empty() {
+        return "0".to_string();
+    }
+
+    let decimals = decimals as usize;
+    let len = raw.len();
+
+    if len <= decimals {
+        // Need to add leading zeros after decimal point
+        let zeros = decimals - len;
+        format!("0.{}{}", "0".repeat(zeros), raw.trim_end_matches('0'))
+    } else {
+        // Insert decimal point
+        let (integer, fraction) = raw.split_at(len - decimals);
+        let fraction = fraction.trim_end_matches('0');
+        if fraction.is_empty() {
+            integer.to_string()
+        } else {
+            format!("{}.{}", integer, fraction)
+        }
     }
 }
 
 /// Get currency display name from identifier
 fn currency_name(identifier: &str) -> String {
-    // NEAR tokens
+    // Check for OMFT cross-chain format: nep141:{chain}-{address}.omft.near
+    if identifier.starts_with("nep141:") && identifier.ends_with(".omft.near") {
+        let inner = identifier
+            .trim_start_matches("nep141:")
+            .trim_end_matches(".omft.near");
+        if let Some((chain, addr)) = inner.split_once('-') {
+            let token = match addr.to_lowercase().as_str() {
+                a if a == USDC_ETH || a == USDC_BASE || a == USDC_ARB || a == USDC_GNOSIS => "USDC",
+                a if a == USDT_ETH || a == USDT_ARB => "USDT",
+                a if a == DAI_ETH => "DAI",
+                a if a == WBTC_ETH => "WBTC",
+                _ => return format!("{}:{}", chain, &addr[..8.min(addr.len())]),
+            };
+            return format!("{}:{}", chain, token);
+        }
+        return identifier.to_string();
+    }
+
+    // NEAR native tokens
     if identifier.starts_with("nep141:") {
         return match identifier {
             "nep141:wrap.near" => "NEAR".to_string(),
@@ -169,59 +222,200 @@ fn currency_name(identifier: &str) -> String {
             "nep141:aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near" => {
                 "AURORA".to_string()
             }
+            "nep141:btc.omft.near" => "BTC".to_string(),
             _ => identifier.to_string(),
         };
     }
 
-    // EVM tokens
-    if identifier.starts_with("eth:") {
-        let parts: Vec<&str> = identifier.split(':').collect();
-        if parts.len() >= 3 {
-            let chain_id: u64 = parts[1].parse().unwrap_or(0);
-            let chain_name = match chain_id {
-                1 => "eth",
-                42161 => "arb",
-                8453 => "base",
-                10 => "op",
-                56 => "bsc",
-                137 => "pol",
-                43114 => "avax",
-                100 => "gnosis",
-                _ => "evm",
-            };
-            let token = parts[2];
-            if token == "native" {
-                return format!("{}:native", chain_name);
-            }
-            // Try to identify common tokens
-            let token_lower = token.to_lowercase();
-            if token_lower.contains("usdc") || token_lower == USDC_ETH || token_lower == USDC_BASE {
-                return format!("{}:USDC", chain_name);
-            }
-            if token_lower.contains("usdt") || token_lower == USDT_ETH {
-                return format!("{}:USDT", chain_name);
-            }
-            return format!("{}:{}", chain_name, &token[..8.min(token.len())]);
-        }
-    }
-
-    // BTC
-    if identifier == "btc:mainnet" {
-        return "BTC".to_string();
-    }
-
-    // Solana
-    if identifier.starts_with("solana:") {
-        let parts: Vec<&str> = identifier.split(':').collect();
-        if parts.len() >= 3 {
-            if parts[2] == "native" {
-                return "SOL".to_string();
-            }
-            return format!("sol:{}", &parts[2][..8.min(parts[2].len())]);
-        }
-    }
-
     identifier.to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct Token {
+    #[serde(rename = "assetId")]
+    asset_id: Option<String>,
+    symbol: String,
+    blockchain: String,
+    decimals: Option<u8>,
+}
+
+async fn run_tokens(args: &[String]) {
+    let filter = args.first().map(|s| s.to_lowercase());
+
+    info!("Fetching tokens from {}", TOKENS_API_URL);
+
+    let client = reqwest::Client::new();
+    match client.get(TOKENS_API_URL).send().await {
+        Ok(response) => match response.json::<Vec<Token>>().await {
+            Ok(tokens) => {
+                let filtered: Vec<&Token> = tokens
+                    .iter()
+                    .filter(|t| {
+                        if let Some(ref f) = filter {
+                            t.symbol.to_lowercase().contains(f)
+                                || t.blockchain.to_lowercase().contains(f)
+                        } else {
+                            true
+                        }
+                    })
+                    .collect();
+
+                println!();
+                println!("Tokens: {} (showing {})", tokens.len(), filtered.len());
+                println!("{:-<100}", "");
+                println!(
+                    "{:<10} {:<8} {:<10} {:<60}",
+                    "CHAIN", "SYMBOL", "DECIMALS", "ASSET ID"
+                );
+                println!("{:-<100}", "");
+
+                for token in filtered.iter().take(50) {
+                    let asset_id = token.asset_id.as_deref().unwrap_or("-");
+                    let decimals = token
+                        .decimals
+                        .map(|d| d.to_string())
+                        .unwrap_or("-".to_string());
+                    println!(
+                        "{:<10} {:<8} {:<10} {:<60}",
+                        token.blockchain,
+                        token.symbol,
+                        decimals,
+                        if asset_id.len() > 60 {
+                            format!("{}...", &asset_id[..57])
+                        } else {
+                            asset_id.to_string()
+                        }
+                    );
+                }
+
+                if filtered.len() > 50 {
+                    println!();
+                    println!("... and {} more tokens", filtered.len() - 50);
+                }
+
+                println!();
+                println!("Filter: near-intents-tools tokens <symbol|chain>");
+            }
+            Err(e) => {
+                error!("Failed to parse tokens: {}", e);
+            }
+        },
+        Err(e) => {
+            error!("Failed to fetch tokens: {}", e);
+        }
+    }
+}
+
+async fn run_monitor(args: &[String]) {
+    let interval_secs: u64 = args.first().and_then(|s| s.parse().ok()).unwrap_or(3);
+
+    let client = SolverRelayRpcClient::new();
+
+    // Use 1 unit of each token as base amount
+    let amounts: Vec<(&str, &str, &str)> = vec![
+        ("near", "usdt", "1000000000000000000000000"), // 1 NEAR
+        ("near", "usdc", "1000000000000000000000000"), // 1 NEAR
+        ("usdt", "usdc", "1000000"),                   // 1 USDT
+        ("usdc", "usdt", "1000000"),                   // 1 USDC
+        ("usdt", "near", "1000000"),                   // 1 USDT
+        ("usdc", "near", "1000000"),                   // 1 USDC
+        ("near", "eth:usdc", "1000000000000000000000000"), // 1 NEAR
+        ("near", "arb:usdc", "1000000000000000000000000"), // 1 NEAR
+    ];
+
+    loop {
+        // Clear screen
+        print!("\x1B[2J\x1B[1;1H");
+        println!(
+            "NEAR Intents Quote Monitor (refreshing every {}s) | Press Ctrl+C to stop",
+            interval_secs
+        );
+        println!(
+            "Time: {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        println!();
+        println!(
+            "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
+            "PAIR", "RATE", "BEST OUT", "QTY", "EXPIRES", "BEST QUOTE HASH"
+        );
+        println!("{:-<120}", "");
+
+        for (from, to, amount) in &amounts {
+            let from_resolved = resolve_currency(from);
+            let to_resolved = resolve_currency(to);
+            let from_name = currency_name(&from_resolved);
+            let to_name = currency_name(&to_resolved);
+            let pair = format!("{} → {}", from_name, to_name);
+
+            match client
+                .quote(
+                    &from_resolved,
+                    &to_resolved,
+                    Some(amount),
+                    None,
+                    Some(60000),
+                )
+                .await
+            {
+                Ok(quotes) if !quotes.is_empty() => {
+                    // Find best quote (highest output)
+                    let best = quotes
+                        .iter()
+                        .max_by(|a, b| {
+                            a.amount_out
+                                .parse::<u128>()
+                                .unwrap_or(0)
+                                .cmp(&b.amount_out.parse::<u128>().unwrap_or(0))
+                        })
+                        .unwrap();
+
+                    let out_decimals = token_decimals(&best.defuse_asset_identifier_out);
+                    let out_human = format_amount(&best.amount_out, out_decimals);
+
+                    // Truncate for display (max 12 chars)
+                    let out_display = if out_human.len() > 12 {
+                        format!("{}...", &out_human[..9])
+                    } else {
+                        out_human.clone()
+                    };
+
+                    // Calculate rate (output per 1 input)
+                    let rate = format!("1 → {}", out_display);
+
+                    // Parse expiration time
+                    let expires = &best.expiration_time[11..19]; // Extract HH:MM:SS
+
+                    println!(
+                        "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
+                        pair,
+                        rate,
+                        out_display,
+                        quotes.len(),
+                        expires,
+                        &best.quote_hash
+                    );
+                }
+                Ok(_) => {
+                    println!(
+                        "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
+                        pair, "-", "-", "0", "-", "-"
+                    );
+                }
+                Err(_) => {
+                    println!(
+                        "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
+                        pair, "error", "-", "-", "-", "-"
+                    );
+                }
+            }
+        }
+
+        println!();
+        println!("Pairs with quotes update in real-time based on solver availability.");
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+    }
 }
 
 #[tokio::main]
@@ -229,7 +423,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
+                .add_directive(tracing::Level::WARN.into()),
         )
         .init();
 
@@ -240,7 +434,9 @@ async fn main() {
         "ws" | "websocket" => run_websocket().await,
         "quote" => run_quote(&args[2..], false).await,
         "watch" => run_quote(&args[2..], true).await,
+        "monitor" => run_monitor(&args[2..]).await,
         "status" => run_status(&args[2..]).await,
+        "tokens" => run_tokens(&args[2..]).await,
         _ => print_help(),
     }
 }
@@ -255,6 +451,8 @@ Usage: near-intents-tools <command> [options]
 Commands:
   quote <from> <to> <amount>             Request a quote for a token swap
   watch <from> <to> <amount> [interval]  Continuously watch quotes (default: 5s)
+  monitor [interval]                     Live dashboard of all major pairs (default: 3s)
+  tokens [filter]                        List available tokens
   status <intent_hash>                   Check the status of an intent
   ws, websocket                          Connect to Solver Relay WebSocket (solvers only)
 
@@ -263,30 +461,32 @@ Currency Format:
   Chain-prefixed: near:usdt, eth:usdc, base:usdc, arb:usdt
 
 Supported Chains:
-  near              NEAR Protocol
-  eth               Ethereum Mainnet
-  base              Base
-  arb, arbitrum     Arbitrum One
-  op, optimism      Optimism
-  bsc, bnb          BNB Chain
-  pol, polygon      Polygon
-  avax              Avalanche
-  gnosis            Gnosis Chain
-  btc               Bitcoin
-  sol, solana       Solana
+  near              NEAR Protocol (native)
+  eth               Ethereum Mainnet (via OMFT)
+  base              Base (via OMFT)
+  arb, arbitrum     Arbitrum One (via OMFT)
+  gnosis            Gnosis Chain (via OMFT)
+  sol, solana       Solana (via OMFT)
+  btc               Bitcoin (via OMFT)
 
 Examples:
+  # List all tokens
+  near-intents-tools tokens
+
+  # List USDC on all chains
+  near-intents-tools tokens usdc
+
   # NEAR to USDT on NEAR (1 NEAR = 10^24 yoctoNEAR)
   near-intents-tools quote near usdt 1000000000000000000000000
 
-  # NEAR to USDC on Base
-  near-intents-tools quote near base:usdc 1000000000000000000000000
-
-  # ETH on Ethereum to USDC on Arbitrum
-  near-intents-tools quote eth:eth arb:usdc 1000000000000000000
+  # NEAR to USDC on Ethereum
+  near-intents-tools quote near eth:usdc 1000000000000000000000000
 
   # Watch quotes continuously
   near-intents-tools watch near usdt 1000000000000000000000000
+
+  # Monitor all major pairs (live dashboard)
+  near-intents-tools monitor
 
   # Check intent status
   near-intents-tools status <intent_hash>
@@ -363,7 +563,7 @@ async fn run_quote(args: &[String], watch: bool) {
             cmd
         );
         eprintln!(
-            "  near-intents-tools {} near base:usdc 1000000000000000000000000",
+            "  near-intents-tools {} near eth:usdc 1000000000000000000000000",
             cmd
         );
         std::process::exit(1);
@@ -404,9 +604,13 @@ async fn run_quote(args: &[String], watch: bool) {
                     for (i, quote) in quotes.iter().enumerate() {
                         let in_name = currency_name(&quote.defuse_asset_identifier_in);
                         let out_name = currency_name(&quote.defuse_asset_identifier_out);
+                        let in_decimals = token_decimals(&quote.defuse_asset_identifier_in);
+                        let out_decimals = token_decimals(&quote.defuse_asset_identifier_out);
+                        let in_human = format_amount(&quote.amount_in, in_decimals);
+                        let out_human = format_amount(&quote.amount_out, out_decimals);
                         println!("Quote #{}:", i + 1);
-                        println!("  From:    {} {}", quote.amount_in, in_name);
-                        println!("  To:      {} {}", quote.amount_out, out_name);
+                        println!("  From:    {} {}", in_human, in_name);
+                        println!("  To:      {} {}", out_human, out_name);
                         println!("  Hash:    {}", quote.quote_hash);
                         println!("  Expires: {}", quote.expiration_time);
                         println!();
