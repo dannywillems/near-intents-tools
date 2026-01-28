@@ -56,11 +56,25 @@ The tool connects to the NEAR Intents Solver Relay WebSocket endpoint
 - Published intents
 - Intent status updates
 
+### API Access Note
+
+The Solver Relay WebSocket endpoint (`wss://solver-relay-v2.chaindefuser.com/ws`)
+is restricted to registered solvers. Connecting without proper registration will
+result in a 403 Forbidden error.
+
+To become a solver, refer to the [Create a Solver](https://docs.near.org/chain-abstraction/intents/solvers)
+documentation.
+
+For public intent monitoring, consider using the [Intents Explorer API](https://docs.near-intents.org/near-intents/integration/distribution-channels/intents-explorer-api)
+which provides historical intent data with JWT authentication.
+
 ## References
 
 - [NEAR Intents Documentation](https://docs.near-intents.org)
 - [NEAR Intents Overview](https://docs.near.org/chain-abstraction/intents/overview)
 - [Solver Relay API](https://docs.near-intents.org/near-intents/market-makers/bus/solver-relay)
+- [Intents Explorer API](https://docs.near-intents.org/near-intents/integration/distribution-channels/intents-explorer-api)
+- [Create a Solver](https://docs.near.org/chain-abstraction/intents/solvers)
 
 ## License
 
