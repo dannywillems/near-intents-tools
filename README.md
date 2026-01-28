@@ -62,8 +62,7 @@ The Solver Relay WebSocket endpoint (`wss://solver-relay-v2.chaindefuser.com/ws`
 is restricted to registered solvers. Connecting without proper registration will
 result in a 403 Forbidden error.
 
-To become a solver, refer to the [Create a Solver](https://docs.near.org/chain-abstraction/intents/solvers)
-documentation.
+To become a market maker/solver, refer to the [Market Makers documentation](https://docs.near-intents.org/near-intents/market-makers).
 
 For public intent monitoring, consider using the [Intents Explorer API](https://docs.near-intents.org/near-intents/integration/distribution-channels/intents-explorer-api)
 which provides historical intent data with JWT authentication.
@@ -74,7 +73,7 @@ which provides historical intent data with JWT authentication.
 - [NEAR Intents Overview](https://docs.near.org/chain-abstraction/intents/overview)
 - [Solver Relay API](https://docs.near-intents.org/near-intents/market-makers/bus/solver-relay)
 - [Intents Explorer API](https://docs.near-intents.org/near-intents/integration/distribution-channels/intents-explorer-api)
-- [Create a Solver](https://docs.near.org/chain-abstraction/intents/solvers)
+- [Market Makers](https://docs.near-intents.org/near-intents/market-makers)
 
 ## License
 
