@@ -12,15 +12,13 @@ async fn main() {
         )
         .init();
 
-    info!("NEAR Intents Tools");
-
-    // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 
     match mode {
         "ws" | "websocket" => run_websocket().await,
-        "rpc" | "quote" => run_rpc_demo().await,
+        "quote" => run_quote(&args[2..]).await,
+        "status" => run_status(&args[2..]).await,
         _ => print_help(),
     }
 }
@@ -30,13 +28,36 @@ fn print_help() {
         r#"
 NEAR Intents Tools
 
-Usage: near-intents-tools <command>
+Usage: near-intents-tools <command> [options]
 
 Commands:
-  ws, websocket    Connect to the Solver Relay WebSocket (requires solver registration)
-  rpc, quote       Demo RPC quote request
+  quote <from> <to> <amount>   Request a quote for a token swap
+  status <intent_hash>         Check the status of an intent
+  ws, websocket                Connect to Solver Relay WebSocket (solvers only)
 
-Note: The WebSocket endpoint requires solver registration.
+Arguments:
+  <from>          Source asset (e.g., nep141:wrap.near, nep141:usdt.tether-token.near)
+  <to>            Target asset (e.g., nep141:usdc.tether-token.near)
+  <amount>        Amount in smallest units (e.g., 1000000000000000000000000 for 1 NEAR)
+  <intent_hash>   Intent hash to query
+
+Examples:
+  # Quote 1 NEAR to USDT
+  near-intents-tools quote nep141:wrap.near nep141:usdt.tether-token.near 1000000000000000000000000
+
+  # Quote 1 USDC to NEAR
+  near-intents-tools quote nep141:usdc nep141:wrap.near 1000000
+
+  # Check intent status
+  near-intents-tools status abc123...
+
+Common tokens:
+  nep141:wrap.near                  - Wrapped NEAR
+  nep141:usdt.tether-token.near     - USDT on NEAR
+  nep141:usdc                       - USDC on NEAR
+  nep141:aurora                     - AURORA token
+
+Note: WebSocket endpoint requires solver registration.
       Public connections will receive 403 Forbidden.
 
 For more information, see:
@@ -95,42 +116,86 @@ async fn run_websocket() {
     }
 }
 
-async fn run_rpc_demo() {
-    info!("Running RPC demo...");
+async fn run_quote(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: near-intents-tools quote <from> <to> <amount>");
+        eprintln!();
+        eprintln!("Example:");
+        eprintln!(
+            "  near-intents-tools quote nep141:wrap.near nep141:usdt.tether-token.near \
+             1000000000000000000000000"
+        );
+        std::process::exit(1);
+    }
+
+    let from = &args[0];
+    let to = &args[1];
+    let amount = &args[2];
+
+    info!("Requesting quote: {} {} -> {}", amount, from, to);
 
     let client = SolverRelayRpcClient::new();
 
-    // Example: Request a quote for NEAR -> USDT swap
-    info!("Requesting quote for 1 NEAR -> USDT...");
-
     match client
-        .quote(
-            "nep141:wrap.near",
-            "nep141:usdt.tether-token.near",
-            Some("1000000000000000000000000"), // 1 NEAR in yoctoNEAR
-            None,
-            Some(60000),
-        )
+        .quote(from, to, Some(amount), None, Some(60000))
         .await
     {
         Ok(quotes) => {
             if quotes.is_empty() {
-                info!("No quotes available");
+                println!("No quotes available for this pair");
             } else {
-                for quote in quotes {
-                    info!(
-                        "Quote: {} {} -> {} {} (expires: {})",
-                        quote.amount_in,
-                        quote.defuse_asset_identifier_in,
-                        quote.amount_out,
-                        quote.defuse_asset_identifier_out,
-                        quote.expiration_time
+                println!();
+                println!("Quotes received: {}", quotes.len());
+                println!("{:-<80}", "");
+                for (i, quote) in quotes.iter().enumerate() {
+                    println!("Quote #{}:", i + 1);
+                    println!(
+                        "  From:    {} {}",
+                        quote.amount_in, quote.defuse_asset_identifier_in
                     );
+                    println!(
+                        "  To:      {} {}",
+                        quote.amount_out, quote.defuse_asset_identifier_out
+                    );
+                    println!("  Hash:    {}", quote.quote_hash);
+                    println!("  Expires: {}", quote.expiration_time);
+                    println!();
                 }
             }
         }
         Err(e) => {
             error!("Failed to get quote: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_status(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: near-intents-tools status <intent_hash>");
+        std::process::exit(1);
+    }
+
+    let intent_hash = &args[0];
+
+    info!("Checking status for intent: {}", intent_hash);
+
+    let client = SolverRelayRpcClient::new();
+
+    match client.get_status(intent_hash).await {
+        Ok(status) => {
+            println!();
+            println!("Intent Status");
+            println!("{:-<80}", "");
+            println!("  Hash:   {}", status.intent_hash);
+            println!("  Status: {:?}", status.status);
+            if let Some(data) = status.data {
+                println!("  TX:     {}", data.hash);
+            }
+        }
+        Err(e) => {
+            error!("Failed to get status: {}", e);
+            std::process::exit(1);
         }
     }
 }
