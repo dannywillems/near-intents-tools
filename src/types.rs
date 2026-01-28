@@ -143,6 +143,12 @@ pub struct Quote {
     pub amount_out: String,
     /// ISO-8601 formatted expiration time
     pub expiration_time: String,
+    /// Solver identifier (if provided by API)
+    #[serde(default)]
+    pub solver_id: Option<String>,
+    /// Capture any extra fields the API might send
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 // =============================================================================

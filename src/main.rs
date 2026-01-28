@@ -2,6 +2,7 @@ use near_intents_tools::{
     rpc::SolverRelayRpcClient, types::SubscriptionType, ws::SolverRelayWsClient, SolverEvent,
 };
 use serde::Deserialize;
+use std::io::Write;
 use tracing::{error, info};
 
 const TOKENS_API_URL: &str = "https://1click.chaindefuser.com/v0/tokens";
@@ -306,6 +307,22 @@ async fn run_tokens(args: &[String]) {
     }
 }
 
+/// Collected quote data for display
+struct QuoteData {
+    pair: String,
+    quotes: Vec<QuoteInfo>,
+}
+
+struct QuoteInfo {
+    amount_in_raw: String,
+    amount_out_raw: String,
+    amount_out_fmt: String,
+    quote_hash: String,
+    expires: String,
+    solver_id: Option<String>,
+    extra_fields: Vec<(String, String)>,
+}
+
 async fn run_monitor(args: &[String]) {
     let interval_secs: u64 = args.first().and_then(|s| s.parse().ok()).unwrap_or(3);
 
@@ -324,22 +341,17 @@ async fn run_monitor(args: &[String]) {
     ];
 
     loop {
-        // Clear screen
-        print!("\x1B[2J\x1B[1;1H");
+        // Print immediately to show we're working
         println!(
-            "NEAR Intents Quote Monitor (refreshing every {}s) | Press Ctrl+C to stop",
-            interval_secs
+            "\n[{}] Fetching quotes...",
+            chrono::Utc::now().format("%H:%M:%S")
         );
-        println!(
-            "Time: {}",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-        );
-        println!();
-        println!(
-            "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
-            "PAIR", "RATE", "BEST OUT", "QTY", "EXPIRES", "BEST QUOTE HASH"
-        );
-        println!("{:-<120}", "");
+        let _ = std::io::stdout().flush();
+
+        // Collect all quotes first
+        let mut all_quotes: Vec<QuoteData> = Vec::new();
+        let mut total_quoters = 0;
+        let mut unique_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (from, to, amount) in &amounts {
             let from_resolved = resolve_currency(from);
@@ -359,60 +371,164 @@ async fn run_monitor(args: &[String]) {
                 .await
             {
                 Ok(quotes) if !quotes.is_empty() => {
-                    // Find best quote (highest output)
-                    let best = quotes
+                    let out_decimals = token_decimals(&quotes[0].defuse_asset_identifier_out);
+                    let mut quote_infos: Vec<QuoteInfo> = quotes
                         .iter()
-                        .max_by(|a, b| {
-                            a.amount_out
-                                .parse::<u128>()
-                                .unwrap_or(0)
-                                .cmp(&b.amount_out.parse::<u128>().unwrap_or(0))
+                        .map(|q| {
+                            unique_hashes.insert(q.quote_hash.clone());
+                            let out_human = format_amount(&q.amount_out, out_decimals);
+                            let out_display = if out_human.len() > 14 {
+                                format!("{}...", &out_human[..11])
+                            } else {
+                                out_human
+                            };
+
+                            // Collect extra fields
+                            let extra: Vec<(String, String)> = q
+                                .extra
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.to_string()))
+                                .collect();
+
+                            QuoteInfo {
+                                amount_in_raw: q.amount_in.clone(),
+                                amount_out_raw: q.amount_out.clone(),
+                                amount_out_fmt: out_display,
+                                quote_hash: q.quote_hash.clone(),
+                                expires: q.expiration_time.clone(),
+                                solver_id: q.solver_id.clone(),
+                                extra_fields: extra,
+                            }
                         })
-                        .unwrap();
+                        .collect();
 
-                    let out_decimals = token_decimals(&best.defuse_asset_identifier_out);
-                    let out_human = format_amount(&best.amount_out, out_decimals);
+                    // Sort by amount (best first - highest output)
+                    quote_infos.sort_by(|a, b| {
+                        b.amount_out_raw
+                            .parse::<u128>()
+                            .unwrap_or(0)
+                            .cmp(&a.amount_out_raw.parse::<u128>().unwrap_or(0))
+                    });
 
-                    // Truncate for display (max 12 chars)
-                    let out_display = if out_human.len() > 12 {
-                        format!("{}...", &out_human[..9])
-                    } else {
-                        out_human.clone()
-                    };
-
-                    // Calculate rate (output per 1 input)
-                    let rate = format!("1 → {}", out_display);
-
-                    // Parse expiration time
-                    let expires = &best.expiration_time[11..19]; // Extract HH:MM:SS
-
-                    println!(
-                        "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
+                    total_quoters += quotes.len();
+                    all_quotes.push(QuoteData {
                         pair,
-                        rate,
-                        out_display,
-                        quotes.len(),
-                        expires,
-                        &best.quote_hash
-                    );
+                        quotes: quote_infos,
+                    });
                 }
                 Ok(_) => {
-                    println!(
-                        "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
-                        pair, "-", "-", "0", "-", "-"
-                    );
+                    all_quotes.push(QuoteData {
+                        pair,
+                        quotes: vec![],
+                    });
                 }
                 Err(_) => {
-                    println!(
-                        "{:<20} {:<15} {:<15} {:<6} {:<10} {:<44}",
-                        pair, "error", "-", "-", "-", "-"
-                    );
+                    all_quotes.push(QuoteData {
+                        pair,
+                        quotes: vec![],
+                    });
                 }
             }
         }
 
+        // Print separator between refreshes
+        println!("\n{}", "=".repeat(80));
+        println!(
+            "╔══════════════════════════════════════════════════════════════════════════════╗"
+        );
+        println!(
+            "║  NEAR Intents Quote Monitor | {} quotes from {} unique sources | {}s refresh  ║",
+            total_quoters,
+            unique_hashes.len(),
+            interval_secs
+        );
+        println!(
+            "╚══════════════════════════════════════════════════════════════════════════════╝"
+        );
+        println!(
+            "Time: {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        );
         println!();
-        println!("Pairs with quotes update in real-time based on solver availability.");
+
+        // Summary table
+        println!("┌─────────────────────────────────────────────────────────────────────────────┐");
+        println!(
+            "│ {:<20} │ {:<5} │ {:<14} │ {:<30} │",
+            "PAIR", "QTY", "BEST RATE", "BEST QUOTE HASH"
+        );
+        println!("├─────────────────────────────────────────────────────────────────────────────┤");
+
+        for data in &all_quotes {
+            if data.quotes.is_empty() {
+                println!(
+                    "│ {:<20} │ {:<5} │ {:<14} │ {:<30} │",
+                    data.pair, "0", "-", "-"
+                );
+            } else {
+                let best = &data.quotes[0];
+                println!(
+                    "│ {:<20} │ {:<5} │ {:<14} │ {:<30} │",
+                    data.pair,
+                    data.quotes.len(),
+                    format!("1→{}", best.amount_out_fmt),
+                    &best.quote_hash[..30.min(best.quote_hash.len())]
+                );
+            }
+        }
+        println!("└─────────────────────────────────────────────────────────────────────────────┘");
+
+        // Detailed quoter breakdown
+        println!();
+        println!("═══════════════════════════════════════════════════════════════════════════════");
+        println!("                           DETAILED QUOTER DATA");
+        println!("═══════════════════════════════════════════════════════════════════════════════");
+
+        for data in &all_quotes {
+            if !data.quotes.is_empty() {
+                println!();
+                println!("▶ {} ({} quoters)", data.pair, data.quotes.len());
+                println!(
+                    "  ─────────────────────────────────────────────────────────────────────────"
+                );
+
+                for (i, q) in data.quotes.iter().enumerate() {
+                    let rank = if i == 0 { "★ BEST" } else { "       " };
+                    let solver = q
+                        .solver_id
+                        .as_ref()
+                        .map(|s| format!(" [solver: {}]", s))
+                        .unwrap_or_default();
+
+                    println!("  {} Quote #{}", rank, i + 1);
+                    println!("       Hash:       {}", q.quote_hash);
+                    println!(
+                        "       Amount Out: {} (raw: {})",
+                        q.amount_out_fmt, q.amount_out_raw
+                    );
+                    println!("       Amount In:  {}", q.amount_in_raw);
+                    println!("       Expires:    {}", q.expires);
+
+                    if !solver.is_empty() {
+                        println!("       Solver:    {}", solver);
+                    }
+
+                    if !q.extra_fields.is_empty() {
+                        println!("       Extra data:");
+                        for (key, val) in &q.extra_fields {
+                            println!("         {}: {}", key, val);
+                        }
+                    }
+                    println!();
+                }
+            }
+        }
+
+        println!("───────────────────────────────────────────────────────────────────────────────");
+        println!("Press Ctrl+C to stop");
+
+        // Flush stdout to ensure output is visible
+        let _ = std::io::stdout().flush();
 
         tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
     }
@@ -609,10 +725,27 @@ async fn run_quote(args: &[String], watch: bool) {
                         let in_human = format_amount(&quote.amount_in, in_decimals);
                         let out_human = format_amount(&quote.amount_out, out_decimals);
                         println!("Quote #{}:", i + 1);
-                        println!("  From:    {} {}", in_human, in_name);
-                        println!("  To:      {} {}", out_human, out_name);
-                        println!("  Hash:    {}", quote.quote_hash);
-                        println!("  Expires: {}", quote.expiration_time);
+                        println!(
+                            "  From:      {} {} (raw: {})",
+                            in_human, in_name, quote.amount_in
+                        );
+                        println!(
+                            "  To:        {} {} (raw: {})",
+                            out_human, out_name, quote.amount_out
+                        );
+                        println!("  Hash:      {}", quote.quote_hash);
+                        println!("  Expires:   {}", quote.expiration_time);
+                        println!("  Asset In:  {}", quote.defuse_asset_identifier_in);
+                        println!("  Asset Out: {}", quote.defuse_asset_identifier_out);
+                        if let Some(ref solver) = quote.solver_id {
+                            println!("  Solver:    {}", solver);
+                        }
+                        if !quote.extra.is_empty() {
+                            println!("  Extra fields:");
+                            for (key, val) in &quote.extra {
+                                println!("    {}: {}", key, val);
+                            }
+                        }
                         println!();
                     }
                 }
