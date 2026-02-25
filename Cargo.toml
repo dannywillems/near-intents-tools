@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/dannywillems/near-intents-tools"
 
 [dependencies]
-chrono = "0.4.43"
+chrono = "0.4.44"
 futures-util = "0.3.31"
 reqwest = { version = "0.13.1", features = ["json"] }
 serde = { version = "1.0.228", features = ["derive"] }
