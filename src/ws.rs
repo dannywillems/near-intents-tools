@@ -180,8 +180,7 @@ async fn handle_message(text: &str, event_tx: &mpsc::Sender<SolverEvent>) -> Res
 
     // Try to parse as a response (ack for our requests)
     if let Ok(response) = serde_json::from_str::<JsonRpcResponse<String>>(text) {
-        if response.error.is_some() {
-            let error = response.error.unwrap();
+        if let Some(error) = response.error {
             warn!("Received error response: {:?}", error);
             return Err(SolverRelayError::RpcError {
                 code: error.code,
